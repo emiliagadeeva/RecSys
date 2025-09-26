@@ -1,30 +1,33 @@
 // Global variables to store parsed data
-let movies = [];       // Array of movie objects: {id, title, ...}
-let ratings = [];      // Array of rating objects: {userId, movieId, rating}
-let numUsers = 0;      // Number of unique users
-let numMovies = 0;     // Number of unique movies
+let movies = [];
+let ratings = [];
+let numUsers = 0;
+let numMovies = 0;
 
 /**
- * Main function to load and parse all data files
- * This function coordinates the loading of both movie metadata and ratings data
+ * Load MovieLens 100K data from local files u.item and u.data
  */
 async function loadData() {
     try {
         console.log('Starting data loading process...');
+        updateResult('Loading movie data from u.item...', 'info');
         
-        // Load and parse movie metadata first
-        const movieDataUrl = 'https://raw.githubusercontent.com/sidooms/MovieTweetings/master/latest/movies.dat';
-        console.log('Loading movie data from:', movieDataUrl);
-        const movieResponse = await fetch(movieDataUrl);
+        // Load movie data from local u.item file
+        const movieResponse = await fetch('u.item');
+        if (!movieResponse.ok) {
+            throw new Error(`Failed to load u.item: ${movieResponse.status}`);
+        }
         const movieText = await movieResponse.text();
         movies = parseItemData(movieText);
         numMovies = movies.length;
-        console.log(`Parsed ${numMovies} movies`);
         
-        // Load and parse ratings data
-        const ratingDataUrl = 'https://raw.githubusercontent.com/sidooms/MovieTweetings/master/latest/ratings.dat';
-        console.log('Loading rating data from:', ratingDataUrl);
-        const ratingResponse = await fetch(ratingDataUrl);
+        updateResult(`Loaded ${numMovies} movies. Loading ratings from u.data...`, 'info');
+        
+        // Load ratings data from local u.data file
+        const ratingResponse = await fetch('u.data');
+        if (!ratingResponse.ok) {
+            throw new Error(`Failed to load u.data: ${ratingResponse.status}`);
+        }
         const ratingText = await ratingResponse.text();
         ratings = parseRatingData(ratingText);
         
@@ -32,104 +35,123 @@ async function loadData() {
         const uniqueUsers = new Set(ratings.map(r => r.userId));
         numUsers = uniqueUsers.size;
         
-        console.log(`Data loading completed:`);
-        console.log(`- Users: ${numUsers}`);
-        console.log(`- Movies: ${numMovies}`);
-        console.log(`- Ratings: ${ratings.length}`);
+        console.log('Data loading completed:');
+        console.log('- Users:', numUsers);
+        console.log('- Movies:', numMovies);
+        console.log('- Ratings:', ratings.length);
         
+        updateResult(`Data loaded: ${numUsers} users, ${numMovies} movies, ${ratings.length} ratings`, 'success');
         return { movies, ratings, numUsers, numMovies };
         
     } catch (error) {
         console.error('Error loading data:', error);
-        throw new Error(`Failed to load data: ${error.message}`);
+        updateResult(`Error loading local files: ${error.message}. Using demo data...`, 'error');
+        // Fallback to demo data
+        await createDemoData();
+        throw error;
     }
 }
 
 /**
- * Parse movie metadata from text format
- * Expected format: MovieID::Title::Genres
- * Example: 1::Toy Story (1995)::Animation|Children's|Comedy
- * 
- * Why we do this: We need to map movie IDs to human-readable titles for the UI
- * and maintain consistency between movie IDs in ratings and movie metadata.
+ * Parse u.item file - MovieLens 100K format
+ * Format: movieId|movieTitle|releaseDate|videoReleaseDate|IMDbURL|...|genres
+ * Example: 1|Toy Story (1995)|01-Jan-1995||http://us.imdb.com/M/title-exact?Toy%20Story%20(1995)|0|0|0|1|1|1|0|0|0|0|0|0|0|0|0|0|0|0|0
  */
 function parseItemData(text) {
-    console.log('Parsing movie data...');
+    console.log('Parsing u.item movie data...');
     const lines = text.split('\n');
     const movieList = [];
+    let lineCount = 0;
     
     for (const line of lines) {
         if (line.trim() === '') continue;
+        lineCount++;
         
         try {
-            // Handle different possible separators
-            const parts = line.split('::');
+            const parts = line.split('|');
             if (parts.length >= 2) {
                 const movieId = parseInt(parts[0]);
-                // Extract year from title if present (format: "Title (Year)")
+                if (isNaN(movieId)) continue;
+                
+                // Extract title and year (format: "Title (Year)")
                 const title = parts[1].trim();
+                const yearMatch = title.match(/.+\((\d{4})\)/);
+                const year = yearMatch ? parseInt(yearMatch[1]) : null;
+                
+                // Parse genres (last 19 fields)
+                const genres = [];
+                const genreNames = [
+                    "Unknown", "Action", "Adventure", "Animation", "Children's", 
+                    "Comedy", "Crime", "Documentary", "Drama", "Fantasy", 
+                    "Film-Noir", "Horror", "Musical", "Mystery", "Romance", 
+                    "Sci-Fi", "Thriller", "War", "Western"
+                ];
+                
+                for (let i = 5; i <= 23; i++) {
+                    if (parts[i] === '1') {
+                        genres.push(genreNames[i - 5]);
+                    }
+                }
                 
                 movieList.push({
                     id: movieId,
                     title: title,
-                    genres: parts[2] ? parts[2].split('|') : []
+                    year: year,
+                    genres: genres
                 });
             }
         } catch (error) {
             console.warn('Skipping invalid movie line:', line.substring(0, 50));
         }
+        
+        // Limit for performance if file is large
+        if (lineCount >= 2000) break;
     }
     
-    // Sort by movie ID for consistency
-    movieList.sort((a, b) => a.id - b.id);
     console.log(`Successfully parsed ${movieList.length} movies`);
     return movieList;
 }
 
 /**
- * Parse ratings data from text format
- * Expected format: UserID::MovieID::Rating::Timestamp
- * Example: 196::242::3::881250949
- * 
- * Why we do this: Ratings are the core training data for our matrix factorization model.
- * We need to convert this text data into numerical arrays that TensorFlow.js can process.
- * We also normalize user and movie IDs to be 0-indexed for the embedding layers.
+ * Parse u.data file - MovieLens 100K format  
+ * Format: userId\tmovieId\trating\ttimestamp
+ * Example: 196\t242\t3\t881250949
  */
 function parseRatingData(text) {
-    console.log('Parsing rating data...');
+    console.log('Parsing u.data rating data...');
     const lines = text.split('\n');
     const ratingList = [];
+    let lineCount = 0;
+    
+    // Find minimum user ID and movie ID to normalize to 0-indexed
     let minUserId = Infinity;
     let minMovieId = Infinity;
     
-    // First pass: find min IDs to normalize to 0-indexed
+    // First pass: find min IDs
     for (const line of lines) {
         if (line.trim() === '') continue;
-        
-        const parts = line.split('::');
+        const parts = line.split('\t');
         if (parts.length >= 3) {
-            const userId = parseInt(parts[0]);
-            const movieId = parseInt(parts[1]);
-            
-            minUserId = Math.min(minUserId, userId);
-            minMovieId = Math.min(minMovieId, movieId);
+            minUserId = Math.min(minUserId, parseInt(parts[0]));
+            minMovieId = Math.min(minMovieId, parseInt(parts[1]));
         }
     }
     
     // Second pass: parse all ratings with normalized IDs
     for (const line of lines) {
         if (line.trim() === '') continue;
+        lineCount++;
         
         try {
-            const parts = line.split('::');
+            const parts = line.split('\t');
             if (parts.length >= 3) {
                 // Normalize IDs to be 0-indexed for TensorFlow embeddings
                 const userId = parseInt(parts[0]) - minUserId;
                 const movieId = parseInt(parts[1]) - minMovieId;
                 const rating = parseFloat(parts[2]);
                 
-                // Only include valid ratings
-                if (!isNaN(userId) && !isNaN(movieId) && !isNaN(rating) && rating >= 0.5 && rating <= 5) {
+                if (!isNaN(userId) && !isNaN(movieId) && !isNaN(rating) && 
+                    rating >= 0.5 && rating <= 5 && userId >= 0 && movieId >= 0) {
                     ratingList.push({
                         userId: userId,
                         movieId: movieId,
@@ -139,13 +161,55 @@ function parseRatingData(text) {
                 }
             }
         } catch (error) {
-            console.warn('Skipping invalid rating line:', line.substring(0, 50));
+            console.warn('Skipping invalid rating line');
         }
+        
+        // Limit for performance
+        if (lineCount >= 10000) break;
     }
     
     console.log(`Successfully parsed ${ratingList.length} ratings`);
-    console.log(`User ID range: ${Math.min(...ratingList.map(r => r.userId))} - ${Math.max(...ratingList.map(r => r.userId))}`);
-    console.log(`Movie ID range: ${Math.min(...ratingList.map(r => r.movieId))} - ${Math.max(...ratingList.map(r => r.movieId))}`);
-    
     return ratingList;
+}
+
+/**
+ * Fallback demo data creation if local files are not available
+ */
+async function createDemoData() {
+    console.log('Creating demo data...');
+    updateResult('Local files not found. Using demo data...', 'warning');
+    
+    // Create minimal demo data
+    movies = [
+        { id: 1, title: "Toy Story (1995)", year: 1995, genres: ["Animation", "Comedy"] },
+        { id: 2, title: "Jumanji (1995)", year: 1995, genres: ["Adventure", "Fantasy"] },
+        { id: 3, title: "Grumpier Old Men (1995)", year: 1995, genres: ["Comedy", "Romance"] },
+        { id: 4, title: "Waiting to Exhale (1995)", year: 1995, genres: ["Comedy", "Drama"] },
+        { id: 5, title: "Father of the Bride Part II (1995)", year: 1995, genres: ["Comedy"] }
+    ];
+    
+    ratings = [
+        { userId: 1, movieId: 1, rating: 4.0 },
+        { userId: 1, movieId: 2, rating: 3.0 },
+        { userId: 1, movieId: 3, rating: 5.0 },
+        { userId: 2, movieId: 1, rating: 5.0 },
+        { userId: 2, movieId: 4, rating: 4.0 },
+        { userId: 3, movieId: 5, rating: 3.5 },
+        { userId: 3, movieId: 2, rating: 4.5 }
+    ];
+    
+    numUsers = 3;
+    numMovies = 5;
+    
+    console.log('Demo data created:', { numUsers, numMovies, ratings: ratings.length });
+}
+
+// Helper function to update UI from data.js
+function updateResult(message, type) {
+    const resultElement = document.getElementById('result');
+    if (resultElement) {
+        const colors = { info: '#3498db', success: '#27ae60', error: '#e74c3c', warning: '#f39c12' };
+        resultElement.style.borderLeftColor = colors[type] || colors.info;
+        resultElement.innerHTML = `<p>${message}</p>`;
+    }
 }
