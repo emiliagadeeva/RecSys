@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Matrix Factorization Movie Recommender</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 Movie Recommender</h1>
+            <p>Matrix Factorization with TensorFlow.js</p>
+        </header>
+
+        <main>
+            <div class="controls">
+                <div class="form-group">
+                    <label for="user-select">Select User:</label>
+                    <select id="user-select">
+                        <option value="">Loading users...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="movie-select">Select Movie:</label>
+                    <select id="movie-select">
+                        <option value="">Loading movies...</option>
+                    </select>
+                </div>
+
+                <button id="predict-btn" onclick="predictRating()" disabled>
+                    Predict Rating
+                </button>
+            </div>
+
+            <div id="result" class="result-area">
+                <p>Loading data and training model...</p>
+            </div>
+
+            <div id="training-progress" class="progress-area">
+                <h3>Training Progress</h3>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div id="epoch-info">Epoch: 0/5</div>
+                <div id="loss-info">Loss: --</div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Load TensorFlow.js first -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="data.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
