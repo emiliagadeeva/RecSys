@@ -39,6 +39,7 @@ Provide four separate, complete code blocks for the following files:
 -   This file is responsible for loading and parsing data.
 -   It must contain the `loadData()`, `parseItemData(text)`, and `parseRatingData(text)` functions as specified previously.
 -   It should also contain two variables to store the number of unique users and movies after parsing, for example: `numUsers` and `numMovies`.
+-   Keep in mind that the data files are in the same location as the code files.
 
 #### **6. `script.js` INSTRUCTIONS**
 
