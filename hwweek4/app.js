@@ -181,7 +181,7 @@ class MovieLensApp {
 
     async loadMockRatings() {
         const ratings = [];
-        for (let i = 0; i < 5000; i++) {
+        for (let i = 0; i < 2000; i++) {
             ratings.push({
                 userId: Math.floor(Math.random() * 200) + 1,
                 movieId: Math.floor(Math.random() * 500) + 1,
@@ -237,7 +237,7 @@ class MovieLensApp {
         this.updateStatus('⚡ Training all three models...');
         
         try {
-            // Initialize all three models
+            // ВАЖНО: Используем правильные имена классов из two-tower.js
             this.models = {
                 baseline: new WithoutDLTwoTower(16, 200, 500, 19),
                 mlp: new MLPTwoTower(16, 200, 500, 19),
@@ -248,13 +248,13 @@ class MovieLensApp {
             
             // Train models sequentially
             this.updateStatus('📈 Training Without DL model...');
-            this.trainingHistories.baseline = await this.models.baseline.train(userInput, movieInput, ratings, 3, 64);
+            this.trainingHistories.baseline = await this.models.baseline.train(userInput, movieInput, ratings, 2, 32);
             
             this.updateStatus('🔬 Training MLP Two-Tower...');
-            this.trainingHistories.mlp = await this.models.mlp.train(userInput, movieInput, ratings, 3, 64);
+            this.trainingHistories.mlp = await this.models.mlp.train(userInput, movieInput, ratings, 2, 32);
             
             this.updateStatus('🧠 Training Deep Learning Two-Tower...');
-            this.trainingHistories.deep = await this.models.deep.train(userInput, movieInput, ratings, 3, 64);
+            this.trainingHistories.deep = await this.models.deep.train(userInput, movieInput, ratings, 2, 32);
             
             this.plotTrainingHistories();
             this.updateStatus('✅ All models trained! Click "Compare All Models" to see results.');
@@ -268,7 +268,7 @@ class MovieLensApp {
     }
 
     prepareTrainingData() {
-        const subsetSize = Math.min(1000, this.data.ratings.length);
+        const subsetSize = Math.min(500, this.data.ratings.length);
         const subsetRatings = this.data.ratings.slice(0, subsetSize);
         
         const userInput = subsetRatings.map(r => r.userId - 1);
@@ -342,9 +342,9 @@ class MovieLensApp {
             
             // Get recommendations from all models
             const [baselineRecs, mlpRecs, deepRecs] = await Promise.all([
-                this.getRecommendations(this.models.baseline, testUserId, 10),
-                this.getRecommendations(this.models.mlp, testUserId, 10),
-                this.getRecommendations(this.models.deep, testUserId, 10)
+                this.getRecommendations(this.models.baseline, testUserId, 8),
+                this.getRecommendations(this.models.mlp, testUserId, 8),
+                this.getRecommendations(this.models.deep, testUserId, 8)
             ]);
             
             // Display all recommendations
@@ -409,20 +409,21 @@ class MovieLensApp {
         });
         
         for (const [userId, count] of userRatingCounts) {
-            if (count >= 3) return userId;
+            if (count >= 2) return userId;
         }
         
         const usersWithRatings = new Set(this.data.ratings.map(r => r.userId));
         return usersWithRatings.size > 0 ? Array.from(usersWithRatings)[0] : 1;
     }
 
-    async getRecommendations(model, userId, count = 10) {
+    async getRecommendations(model, userId, count = 8) {
         try {
             const userEmbedding = await model.getUserEmbedding(userId - 1);
             const allMovies = Array.from(this.data.movies.values());
             const scores = [];
             
-            for (const movie of allMovies.slice(0, 100)) { // Limit for performance
+            // Test with smaller subset for performance
+            for (const movie of allMovies.slice(0, 50)) {
                 const movieEmbedding = await model.getItemEmbedding(movie.id - 1, movie.genres);
                 const score = await this.dotProduct(userEmbedding, movieEmbedding);
                 scores.push({ movie, score });
@@ -450,6 +451,7 @@ class MovieLensApp {
         const product = vec1.mul(vec2);
         const sum = product.sum();
         const result = await sum.data();
+        tf.dispose([product, sum]);
         return result[0];
     }
 
@@ -467,27 +469,43 @@ class MovieLensApp {
             const row = tbody.insertRow();
             const cell = row.insertCell(0);
             cell.colSpan = 3;
-            cell.textContent = 'No recommendations';
+            cell.textContent = 'No recommendations available';
             cell.style.textAlign = 'center';
             cell.style.color = '#666';
+            cell.style.padding = '20px';
             return;
         }
         
         recommendations.forEach(item => {
             const row = tbody.insertRow();
-            row.insertCell(0).textContent = item.title;
             
+            // Title cell
+            const titleCell = row.insertCell(0);
+            titleCell.textContent = item.title;
+            titleCell.style.maxWidth = '150px';
+            titleCell.style.overflow = 'hidden';
+            titleCell.style.textOverflow = 'ellipsis';
+            titleCell.style.whiteSpace = 'nowrap';
+            
+            // Genre cell
             const genreCell = row.insertCell(1);
-            item.genres.forEach(genre => {
-                const span = document.createElement('span');
-                span.className = 'genre-tag';
-                span.textContent = genre;
-                genreCell.appendChild(span);
-            });
+            if (item.genres && item.genres.length > 0) {
+                item.genres.forEach(genre => {
+                    const span = document.createElement('span');
+                    span.className = 'genre-tag';
+                    span.textContent = genre;
+                    genreCell.appendChild(span);
+                });
+            } else {
+                genreCell.textContent = 'Unknown';
+                genreCell.style.color = '#999';
+            }
             
+            // Score cell
             const scoreCell = row.insertCell(2);
             scoreCell.textContent = item.score.toFixed(4);
             scoreCell.className = 'score-cell';
+            scoreCell.style.fontFamily = 'monospace';
         });
     }
 
@@ -501,13 +519,17 @@ class MovieLensApp {
         for (const [modelName, model] of Object.entries(this.models)) {
             try {
                 const recommendations = await this.getRecommendations(model, testUserId, k);
-                const hits = recommendations.filter(rec => {
+                
+                let hits = 0;
+                recommendations.forEach(rec => {
                     const movie = Array.from(this.data.movies.values()).find(m => m.title === rec.title);
-                    return movie && relevantItems.has(movie.id);
-                }).length;
+                    if (movie && relevantItems.has(movie.id)) {
+                        hits++;
+                    }
+                });
                 
                 const precision = hits / k;
-                const recall = hits / Math.min(userRatings.length, k);
+                const recall = userRatings.length > 0 ? hits / Math.min(userRatings.length, k) : 0;
                 const f1 = precision + recall > 0 ? 2 * (precision * recall) / (precision + recall) : 0;
                 
                 metrics[modelName] = { precision, recall, f1 };
@@ -553,4 +575,5 @@ class MovieLensApp {
 let app;
 document.addEventListener('DOMContentLoaded', () => {
     app = new MovieLensApp();
+    console.log('MovieLens Three-Model Comparison Demo initialized');
 });
