@@ -356,86 +356,88 @@ class MovieLensApp {
     }
 
     async trainAllModels() {
-        if (this.isTraining) {
-            this.updateStatus('❌ Training already in progress');
-            return;
-        }
-        if (!this.isDataLoaded) {
-            this.updateStatus('❌ Please load data first');
-            return;
-        }
-
-        this.isTraining = true;
-        this.trainingHistories = {};
-        
-        try {
-            // Clear previous charts
-            document.getElementById('trainingCharts').innerHTML = '';
-            
-            // Initialize models
-            this.models = {
-                baseline: new WithoutDLTwoTower(32, 200, 500, 19),
-                mlp: new MLPTwoTower(32, 200, 500, 19),
-                deep: new DeepLearningTwoTower(32, 200, 500, 19)
-            };
-
-            // Set up status callbacks
-            Object.entries(this.models).forEach(([name, model]) => {
-                model.setStatusCallback((msg) => {
-                    this.updateStatus(`[${name.toUpperCase()}] ${msg}`);
-                });
-            });
-
-            // Prepare training data
-            this.updateStatus('📊 Preparing training data...');
-            const trainingData = this.prepareTrainingData();
-            
-            if (trainingData.userInput.shape[0] === 0) {
-                throw new Error('No training data available');
-            }
-
-            console.log(`Training with ${trainingData.userInput.shape[0]} samples`);
-
-            // Train models sequentially
-            const trainingConfigs = [
-                { name: 'baseline', displayName: 'Without Deep Learning' },
-                { name: 'mlp', displayName: 'MLP Two-Tower' },
-                { name: 'deep', displayName: 'Deep Learning Two-Tower' }
-            ];
-
-            for (const config of trainingConfigs) {
-                this.currentTrainingModel = config.displayName;
-                this.updateStatus(`⚡ Training ${config.displayName}...`);
-                
-                console.log(`=== Starting training for ${config.name} ===`);
-                this.trainingHistories[config.name] = await this.models[config.name].train(
-                    trainingData.userInput,
-                    trainingData.movieInput,
-                    trainingData.ratings,
-                    10, // epochs
-                    32  // batchSize
-                );
-                
-                console.log(`=== Completed training for ${config.name} ===`);
-                this.updateStatus(`✅ ${config.displayName} training completed`);
-                
-                // Small delay between models
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-
-            // Plot results
-            this.plotTrainingHistories();
-            this.updateStatus('🎉 All models trained successfully! Click "Compare All Models" to see recommendations.');
-
-        } catch (error) {
-            this.updateStatus('❌ Training failed: ' + error.message);
-            console.error('Training error:', error);
-        } finally {
-            this.isTraining = false;
-            this.currentTrainingModel = '';
-        }
+    if (this.isTraining || !this.isDataLoaded) {
+        this.updateStatus('❌ Please load data first');
+        return;
     }
+    
+    this.isTraining = true;
+    this.trainingHistories = {};
+    
+    try {
+        // Clear previous charts
+        document.getElementById('trainingCharts').innerHTML = '';
+        
+        // Get actual data dimensions from loaded data
+        const numUsers = this.data.users.size;
+        const numMovies = this.data.movies.size;
+        const numGenres = 19;
+        
+        console.log(`Data dimensions - Users: ${numUsers}, Movies: ${numMovies}, Genres: ${numGenres}`);
+        
+        // Initialize models with correct dimensions
+        this.models = {
+            baseline: new WithoutDLTwoTower(32, numUsers, numMovies, numGenres),
+            mlp: new MLPTwoTower(32, numUsers, numMovies, numGenres),
+            deep: new DeepLearningTwoTower(32, numUsers, numMovies, numGenres)
+        };
 
+        // Set up status callbacks
+        Object.entries(this.models).forEach(([name, model]) => {
+            model.setStatusCallback((msg) => {
+                this.updateStatus(`[${name.toUpperCase()}] ${msg}`);
+            });
+        });
+
+        // Prepare training data
+        this.updateStatus('📊 Preparing training data...');
+        const trainingData = this.prepareTrainingData();
+        
+        if (trainingData.userInput.shape[0] === 0) {
+            throw new Error('No training data available');
+        }
+
+        console.log(`Training with ${trainingData.userInput.shape[0]} samples`);
+
+        // Train models sequentially
+        const trainingConfigs = [
+            { name: 'baseline', displayName: 'Without Deep Learning' },
+            { name: 'mlp', displayName: 'MLP Two-Tower' },
+            { name: 'deep', displayName: 'Deep Learning Two-Tower' }
+        ];
+
+        for (const config of trainingConfigs) {
+            this.currentTrainingModel = config.displayName;
+            this.updateStatus(`⚡ Training ${config.displayName}...`);
+            
+            console.log(`=== Starting training for ${config.name} ===`);
+            this.trainingHistories[config.name] = await this.models[config.name].train(
+                trainingData.userInput,
+                trainingData.movieInput,
+                trainingData.ratings,
+                5, // epochs
+                32  // batchSize
+            );
+            
+            console.log(`=== Completed training for ${config.name} ===`);
+            this.updateStatus(`✅ ${config.displayName} training completed`);
+            
+            // Small delay between models
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        // Plot results
+        this.plotTrainingHistories();
+        this.updateStatus('🎉 All models trained successfully! Click "Compare All Models" to see recommendations.');
+
+    } catch (error) {
+        this.updateStatus('❌ Training failed: ' + error.message);
+        console.error('Training error:', error);
+    } finally {
+        this.isTraining = false;
+        this.currentTrainingModel = '';
+    }
+}
     prepareTrainingData() {
         console.log('Preparing training data...');
         
