@@ -5,24 +5,25 @@ class TwoTowerBase {
         this.embeddingDim = embeddingDim;
         this.numGenres = numGenres;
         this.model = null;
+        this.optimizer = tf.train.adam(0.001);
     }
 
     createModel() {
         throw new Error('createModel must be implemented by subclass');
     }
 
-    async train(ratings, movies, epochs = 10, batchSize = 64) {
+    async train(ratings, movies, epochs = 5, batchSize = 64) {
         if (!this.model) {
             this.model = this.createModel();
         }
 
         // Prepare training data
-        const { userInput, itemInput, labels } = this.prepareTrainingData(ratings, movies);
+        const { userInput, itemInput, genreFeatures, labels } = this.prepareTrainingData(ratings, movies);
 
         const history = { loss: [] };
 
         for (let epoch = 0; epoch < epochs; epoch++) {
-            const epochLoss = await this.trainEpoch(userInput, itemInput, labels, batchSize);
+            const epochLoss = await this.trainEpoch(userInput, itemInput, genreFeatures, labels, batchSize);
             history.loss.push(epochLoss);
             
             console.log(`Epoch ${epoch + 1}/${epochs}, Loss: ${epochLoss.toFixed(4)}`);
@@ -32,6 +33,9 @@ class TwoTowerBase {
                 await tf.nextFrame();
             }
         }
+
+        // Clean up tensors
+        tf.dispose([userInput, itemInput, genreFeatures, labels]);
 
         return history;
     }
@@ -48,49 +52,60 @@ class TwoTowerBase {
         }
 
         // Create genre features tensor
-        const genreFeatures = [];
+        const genreFeaturesArray = [];
         for (const itemId of itemInput) {
             const movie = movies[itemId + 1];
-            genreFeatures.push(movie.genreFeatures);
+            if (movie && movie.genreFeatures) {
+                genreFeaturesArray.push(movie.genreFeatures);
+            } else {
+                // Default genre features if movie not found
+                genreFeaturesArray.push(Array(this.numGenres).fill(0));
+            }
         }
 
         return {
             userInput: tf.tensor1d(userInput, 'int32'),
             itemInput: tf.tensor1d(itemInput, 'int32'),
-            genreFeatures: tf.tensor2d(genreFeatures, [genreFeatures.length, this.numGenres]),
+            genreFeatures: tf.tensor2d(genreFeaturesArray, [genreFeaturesArray.length, this.numGenres], 'float32'),
             labels: tf.tensor1d(labels, 'float32')
         };
     }
 
-    async trainEpoch(userInput, itemInput, labels, batchSize) {
-        const dataset = tf.data.zip({
-            user: tf.data.array(await userInput.array()),
-            item: tf.data.array(await itemInput.array()),
-            genres: tf.data.array(await this.genreFeatures.array()),
-            label: tf.data.array(await labels.array())
-        }).batch(batchSize).shuffle(1000);
+    async trainEpoch(userInput, itemInput, genreFeatures, labels, batchSize) {
+        const userArray = await userInput.array();
+        const itemArray = await itemInput.array();
+        const genreArray = await genreFeatures.array();
+        const labelArray = await labels.array();
 
+        const numBatches = Math.ceil(userArray.length / batchSize);
         let totalLoss = 0;
-        let batchCount = 0;
 
-        await dataset.forEachAsync(batch => {
-            const { user, item, genres, label } = batch;
+        for (let i = 0; i < numBatches; i++) {
+            const start = i * batchSize;
+            const end = Math.min(start + batchSize, userArray.length);
             
-            const loss = this.trainStep(user, item, genres, label);
+            const batchUser = tf.tensor1d(userArray.slice(start, end), 'int32');
+            const batchItem = tf.tensor1d(itemArray.slice(start, end), 'int32');
+            const batchGenre = tf.tensor2d(genreArray.slice(start, end), [end - start, this.numGenres], 'float32');
+            const batchLabel = tf.tensor1d(labelArray.slice(start, end), 'float32');
+
+            const loss = this.trainStep(batchUser, batchItem, batchGenre, batchLabel);
             totalLoss += loss;
-            batchCount++;
-            
-            tf.dispose([user, item, genres, label]);
-        });
 
-        return totalLoss / batchCount;
+            tf.dispose([batchUser, batchItem, batchGenre, batchLabel]);
+            
+            // Allow UI updates
+            if (i % 10 === 0) {
+                await tf.nextFrame();
+            }
+        }
+
+        return totalLoss / numBatches;
     }
 
     trainStep(userIds, itemIds, genreFeatures, labels) {
         return tf.tidy(() => {
-            const optimizer = tf.train.adam(0.001);
-            
-            const loss = () => {
+            const lossFn = () => {
                 const userEmbeddings = this.model.layers[0].apply(userIds);
                 const itemEmbeddings = this.model.layers[1].apply([itemIds, genreFeatures]);
                 
@@ -100,8 +115,8 @@ class TwoTowerBase {
                 return tf.losses.sigmoidCrossEntropy(labels, predictions);
             };
             
-            const lossValue = optimizer.minimize(loss, true).dataSync()[0];
-            return lossValue;
+            const lossValue = this.optimizer.minimize(lossFn, true);
+            return lossValue ? lossValue.dataSync()[0] : 0;
         });
     }
 
@@ -118,44 +133,55 @@ class TwoTowerBase {
             // Prepare genre features for all items
             const allGenreFeatures = [];
             for (let i = 1; i <= this.numItems; i++) {
-                if (movies[i]) {
+                if (movies[i] && movies[i].genreFeatures) {
                     allGenreFeatures.push(movies[i].genreFeatures);
                 } else {
                     allGenreFeatures.push(Array(this.numGenres).fill(0));
                 }
             }
-            const genreTensor = tf.tensor2d(allGenreFeatures, [this.numItems, this.numGenres]);
+            const genreTensor = tf.tensor2d(allGenreFeatures, [this.numItems, this.numGenres], 'float32');
 
-            // Get user embedding
-            const userEmbedding = this.model.layers[0].apply(userTensor);
-            
-            // Get all item embeddings
-            const itemEmbeddings = this.model.layers[1].apply([itemTensor, genreTensor]);
-            
-            // Calculate scores
-            const userEmbeddingRepeated = userEmbedding.tile([this.numItems, 1]);
-            const scores = tf.sum(tf.mul(userEmbeddingRepeated, itemEmbeddings), 1);
-            
-            // Get top K recommendations
-            const { values, indices } = tf.topk(scores, topK);
-            
-            const topScores = values.arraySync();
-            const topIndices = indices.arraySync();
-            
-            const recommendations = [];
-            for (let i = 0; i < topK; i++) {
-                const itemId = topIndices[i] + 1;
-                if (movies[itemId]) {
-                    recommendations.push({
-                        id: itemId,
-                        title: movies[itemId].title,
-                        score: topScores[i],
-                        genres: movies[itemId].genres
-                    });
+            try {
+                // Get user embedding
+                const userEmbedding = this.model.layers[0].apply(userTensor);
+                
+                // Get all item embeddings
+                const itemEmbeddings = this.model.layers[1].apply([itemTensor, genreTensor]);
+                
+                // Calculate scores
+                const userEmbeddingRepeated = userEmbedding.tile([this.numItems, 1]);
+                const scores = tf.sum(tf.mul(userEmbeddingRepeated, itemEmbeddings), 1);
+                
+                // Get top K recommendations
+                const { values, indices } = tf.topk(scores, topK);
+                
+                const topScores = values.arraySync();
+                const topIndices = indices.arraySync();
+                
+                const recommendations = [];
+                for (let i = 0; i < topK; i++) {
+                    const itemId = topIndices[i] + 1;
+                    if (movies[itemId]) {
+                        recommendations.push({
+                            id: itemId,
+                            title: movies[itemId].title,
+                            score: topScores[i],
+                            genres: movies[itemId].genres || ['Unknown']
+                        });
+                    } else {
+                        recommendations.push({
+                            id: itemId,
+                            title: `Movie ${itemId}`,
+                            score: topScores[i],
+                            genres: ['Unknown']
+                        });
+                    }
                 }
+                
+                return recommendations;
+            } finally {
+                tf.dispose([userTensor, itemTensor, genreTensor]);
             }
-            
-            return recommendations;
         });
     }
 }
@@ -231,20 +257,13 @@ class MLPTwoTower extends TwoTowerBase {
         }).apply(userInput);
         const userFlatten = tf.layers.flatten().apply(userEmbedding);
         
-        // Add user features if available
-        let userFeatures = userFlatten;
-        if (this.userFeatures) {
-            // In a real implementation, you'd process user features here
-            // For simplicity, we'll just use the embedding
-        }
-        
         // MLP layers for user tower
         const userHidden1 = tf.layers.dense({
             units: 64,
             activation: 'relu',
             kernelInitializer: 'heNormal',
             name: 'user_hidden1'
-        }).apply(userFeatures);
+        }).apply(userFlatten);
         
         const userOutput = tf.layers.dense({
             units: this.embeddingDim,
@@ -326,19 +345,15 @@ class DeepLearningTwoTower extends TwoTowerBase {
             units: 128,
             activation: 'relu',
             kernelInitializer: 'heNormal',
-            kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
             name: 'user_hidden1'
         }).apply(userFlatten);
-        
-        const userDropout1 = tf.layers.dropout({ rate: 0.3 }).apply(userHidden1);
         
         const userHidden2 = tf.layers.dense({
             units: 64,
             activation: 'relu',
             kernelInitializer: 'heNormal',
-            kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
             name: 'user_hidden2'
-        }).apply(userDropout1);
+        }).apply(userHidden1);
         
         const userOutput = tf.layers.dense({
             units: this.embeddingDim,
@@ -367,19 +382,15 @@ class DeepLearningTwoTower extends TwoTowerBase {
             units: 128,
             activation: 'relu',
             kernelInitializer: 'heNormal',
-            kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
             name: 'item_hidden1'
         }).apply(itemGenreConcat);
-        
-        const itemDropout1 = tf.layers.dropout({ rate: 0.3 }).apply(itemHidden1);
         
         const itemHidden2 = tf.layers.dense({
             units: 64,
             activation: 'relu',
             kernelInitializer: 'heNormal',
-            kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
             name: 'item_hidden2'
-        }).apply(itemDropout1);
+        }).apply(itemHidden1);
         
         const itemOutput = tf.layers.dense({
             units: this.embeddingDim,
