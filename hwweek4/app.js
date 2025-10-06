@@ -56,13 +56,16 @@ class MovieLensApp {
         const ratings = [];
         const lines = ratingsText.trim().split('\n');
         for (const line of lines) {
-            const [user_id, item_id, rating, timestamp] = line.split('\t');
-            ratings.push({
-                user_id: parseInt(user_id),
-                item_id: parseInt(item_id),
-                rating: parseFloat(rating),
-                timestamp: parseInt(timestamp)
-            });
+            const parts = line.split('\t');
+            if (parts.length >= 3) {
+                const [user_id, item_id, rating, timestamp] = parts;
+                ratings.push({
+                    user_id: parseInt(user_id),
+                    item_id: parseInt(item_id),
+                    rating: parseFloat(rating),
+                    timestamp: timestamp ? parseInt(timestamp) : 0
+                });
+            }
         }
 
         // Parse movies and genres
@@ -80,6 +83,7 @@ class MovieLensApp {
             
             const item_id = parseInt(parts[0]);
             const title = parts[1];
+            
             // Parse genre flags (positions 5-23)
             const genreFlags = [];
             for (let i = 5; i < Math.min(parts.length, 24); i++) {
@@ -119,15 +123,21 @@ class MovieLensApp {
             }
         }
 
+        // Validate data
+        const validRatings = ratings.filter(r => r.user_id > 0 && r.item_id > 0);
+        console.log(`Data validation: ${ratings.length} total ratings, ${validRatings.length} valid ratings`);
+        console.log(`Movies: ${Object.keys(movies).length}, Users: ${Object.keys(users).length}`);
+
         this.data = {
-            ratings: ratings,
+            ratings: validRatings,
             movies: movies,
             users: users,
-            numUsers: Math.max(...ratings.map(r => r.user_id)),
-            numItems: Math.max(...ratings.map(r => r.item_id))
+            numUsers: Math.max(...validRatings.map(r => r.user_id)),
+            numItems: Math.max(...validRatings.map(r => r.item_id))
         };
 
-        console.log(`Loaded ${ratings.length} ratings, ${Object.keys(movies).length} movies, ${Object.keys(users).length} users`);
+        console.log(`Loaded ${validRatings.length} ratings, ${Object.keys(movies).length} movies, ${Object.keys(users).length} users`);
+        console.log(`User IDs range: 1-${this.data.numUsers}, Item IDs range: 1-${this.data.numItems}`);
     }
 
     async trainAllModels() {
@@ -138,7 +148,7 @@ class MovieLensApp {
 
         this.updateStatus('Training all models...', 'loading');
 
-        // Initialize models
+        // Initialize models with correct dimensions
         this.models = {
             noDL: new WithoutDLTwoTower(this.data.numUsers, this.data.numItems, 32, 19),
             mlp: new MLPTwoTower(this.data.numUsers, this.data.numItems, 32, 19, this.data.users),
@@ -152,9 +162,11 @@ class MovieLensApp {
             this.updateStatus(`Training ${modelName}...`, 'loading');
             
             try {
-                const history = await model.train(this.data.ratings, this.data.movies, 5, 64);
+                console.log(`Starting training for ${modelName}`);
+                const history = await model.train(this.data.ratings, this.data.movies, 3, 32); // Reduced for testing
                 this.trainingHistory[modelName] = history;
                 this.updateChart(modelName, history);
+                console.log(`Completed training for ${modelName}`, history);
             } catch (error) {
                 console.error(`Error training ${modelName}:`, error);
                 this.updateStatus(`Error training ${modelName}: ${error.message}`, 'error');
@@ -162,9 +174,29 @@ class MovieLensApp {
         }
 
         this.updateStatus('All models trained successfully!', 'success');
+        
+        // Test one model immediately to verify it works
+        await this.quickTest();
+    }
+
+    async quickTest() {
+        if (this.models.noDL && this.models.noDL.model) {
+            try {
+                const testUserId = 1;
+                const testRecs = await this.models.noDL.recommend(testUserId, this.data.movies, 5);
+                console.log('Quick test recommendations:', testRecs);
+            } catch (error) {
+                console.error('Quick test failed:', error);
+            }
+        }
     }
 
     updateChart(modelName, history) {
+        if (!history.loss || history.loss.length === 0) {
+            console.warn(`No loss data for ${modelName}`);
+            return;
+        }
+
         const chartData = {
             values: history.loss.map((loss, epoch) => ({ epoch: epoch + 1, loss: loss }))
         };
@@ -194,22 +226,30 @@ class MovieLensApp {
 
         this.updateStatus('Testing models...', 'loading');
 
-        // Select a random user for testing (ensure user exists in data)
+        // Select a user that definitely has ratings
         const userRatingsMap = {};
         this.data.ratings.forEach(r => {
             if (!userRatingsMap[r.user_id]) userRatingsMap[r.user_id] = [];
             userRatingsMap[r.user_id].push(r);
         });
         
-        const availableUsers = Object.keys(userRatingsMap).map(Number);
+        const availableUsers = Object.keys(userRatingsMap).map(Number).filter(id => userRatingsMap[id].length >= 5);
+        if (availableUsers.length === 0) {
+            this.updateStatus('No suitable users found for testing', 'error');
+            return;
+        }
+        
         const userId = availableUsers[Math.floor(Math.random() * availableUsers.length)];
         this.testUserId = userId;
+
+        console.log(`Testing with user ${userId}, has ${userRatingsMap[userId].length} ratings`);
 
         // Get user's historical ratings
         const userRatings = userRatingsMap[userId]
             .sort((a, b) => b.rating - a.rating)
             .slice(0, 10)
             .map(r => ({
+                id: r.item_id,
                 title: this.data.movies[r.item_id]?.title || `Movie ${r.item_id}`,
                 rating: r.rating,
                 genres: this.data.movies[r.item_id]?.genres?.join(', ') || 'Unknown'
@@ -222,12 +262,15 @@ class MovieLensApp {
         const recommendations = {};
         for (const [modelName, model] of Object.entries(this.models)) {
             try {
+                console.log(`Getting recommendations from ${modelName} for user ${userId}`);
                 const userRecs = await model.recommend(userId, this.data.movies, 10);
+                console.log(`${modelName} recommendations:`, userRecs);
                 recommendations[modelName] = userRecs;
                 this.displayRecommendations(modelName, userRecs);
             } catch (error) {
                 console.error(`Error getting recommendations from ${modelName}:`, error);
                 recommendations[modelName] = [];
+                this.displayRecommendations(modelName, []);
             }
         }
 
@@ -255,11 +298,21 @@ class MovieLensApp {
         const tbody = document.querySelector(`#${tableId} tbody`);
         tbody.innerHTML = '';
         
+        if (recommendations.length === 0) {
+            const row = tbody.insertRow();
+            const cell = row.insertCell(0);
+            cell.colSpan = 3;
+            cell.textContent = 'No recommendations available';
+            cell.style.textAlign = 'center';
+            cell.style.color = '#999';
+            return;
+        }
+        
         recommendations.forEach(movie => {
             const row = tbody.insertRow();
             row.insertCell(0).textContent = movie.title;
             row.insertCell(1).textContent = movie.score.toFixed(4);
-            row.insertCell(2).textContent = movie.genres.join(', ');
+            row.insertCell(2).textContent = Array.isArray(movie.genres) ? movie.genres.join(', ') : movie.genres;
         });
     }
 
@@ -277,6 +330,7 @@ class MovieLensApp {
         for (const [modelName, model] of Object.entries(this.models)) {
             try {
                 metrics[modelName] = await this.calculateMetrics(model, this.testUserId, k);
+                console.log(`Metrics for ${modelName}:`, metrics[modelName]);
             } catch (error) {
                 console.error(`Error calculating metrics for ${modelName}:`, error);
                 metrics[modelName] = { precision: 0, recall: 0, hits: 0, totalPositives: 0 };
@@ -297,6 +351,9 @@ class MovieLensApp {
         // Get recommendations
         const recommendations = await model.recommend(userId, this.data.movies, 100);
         const recommendedIds = recommendations.map(r => r.id).slice(0, k);
+
+        console.log(`User ${userId} positives:`, userPositives);
+        console.log(`Recommended IDs:`, recommendedIds);
 
         // Calculate metrics
         const hits = recommendedIds.filter(id => userPositives.includes(id)).length;
