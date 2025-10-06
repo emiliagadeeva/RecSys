@@ -324,7 +324,7 @@ class MovieLensApp {
 
     prepareTrainingData() {
         // Use only a subset for faster training in browser
-        const subsetSize = Math.min(20000, this.data.ratings.length);
+        const subsetSize = Math.min(50000, this.data.ratings.length);
         const subsetRatings = this.data.ratings.slice(0, subsetSize);
         
         const userInput = subsetRatings.map(r => r.userId - 1); // 0-based indices
