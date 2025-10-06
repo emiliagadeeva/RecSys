@@ -111,11 +111,11 @@ class BaseTwoTower {
     }
 
     compileModel() {
-        // Увеличиваем learning rate и используем правильные метрики
+        // ИСПРАВЛЕНО: убрал binaryCrossentropy из metrics
         this.model.compile({
-            optimizer: tf.train.adam(0.01), // Увеличенный learning rate
+            optimizer: tf.train.adam(0.01),
             loss: 'binaryCrossentropy',
-            metrics: ['accuracy', 'binaryCrossentropy']
+            metrics: ['accuracy'] // Только валидные метрики
         });
     }
 
@@ -167,22 +167,14 @@ class WithoutDLTwoTower extends BaseTwoTower {
         const userVec = this.userTower.apply(userInput);
         const itemVec = this.itemTower.apply([movieIdInput, genreInput]);
         
-        // Dot product with temperature scaling
+        // Dot product
         const dotProduct = tf.layers.dot({ axes: 1 }).apply([userVec, itemVec]);
-        
-        // Scale dot product to better range
-        const scaled = tf.layers.dense({
-            units: 1,
-            activation: 'linear',
-            kernelInitializer: 'ones',
-            useBias: false
-        }).apply(dotProduct);
         
         const prediction = tf.layers.dense({ 
             units: 1, 
             activation: 'sigmoid',
             name: 'prediction'
-        }).apply(scaled);
+        }).apply(dotProduct);
 
         this.model = tf.model({
             inputs: [userInput, movieIdInput, genreInput],
@@ -207,7 +199,7 @@ class MLPTwoTower extends BaseTwoTower {
         }).apply(userInput);
         const userFlatten = tf.layers.flatten().apply(userEmbedding);
         
-        // MLP with dropout for regularization
+        // MLP with hidden layer
         const userHidden = tf.layers.dense({
             units: 24,
             activation: 'relu'
@@ -215,7 +207,7 @@ class MLPTwoTower extends BaseTwoTower {
         
         const userOutput = tf.layers.dense({
             units: this.embeddingDim,
-            activation: 'tanh' // tanh для ограничения значений
+            activation: 'tanh'
         }).apply(userHidden);
         
         this.userTower = tf.model({ inputs: userInput, outputs: userOutput });
