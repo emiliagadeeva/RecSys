@@ -21,27 +21,33 @@ class MovieLensApp {
         this.updateStatus('Loading MovieLens 100K data...', 'loading');
         
         try {
-            // Load ratings data
-            const ratingsResponse = await fetch('data/u.data');
+            // Load ratings data from local data folder
+            const ratingsResponse = await fetch('./data/u.data');
+            if (!ratingsResponse.ok) throw new Error('Failed to load u.data');
             const ratingsText = await ratingsResponse.text();
             
-            // Load movie data
-            const moviesResponse = await fetch('data/u.item');
+            // Load movie data from local data folder
+            const moviesResponse = await fetch('./data/u.item');
+            if (!moviesResponse.ok) throw new Error('Failed to load u.item');
             const moviesText = await moviesResponse.text();
             
-            // Load user data if available
-            let usersResponse;
+            // Load user data if available from local data folder
+            let usersText = null;
             try {
-                usersResponse = await fetch('data/u.user');
+                const usersResponse = await fetch('./data/u.user');
+                if (usersResponse.ok) {
+                    usersText = await usersResponse.text();
+                }
             } catch (e) {
                 console.log('User data not available, proceeding without it');
             }
             
-            this.parseData(ratingsText, moviesText, usersResponse ? await usersResponse.text() : null);
+            this.parseData(ratingsText, moviesText, usersText);
             this.updateStatus('Data loaded successfully!', 'success');
             
         } catch (error) {
             this.updateStatus(`Error loading data: ${error.message}`, 'error');
+            console.error('Data loading error:', error);
         }
     }
 
@@ -70,9 +76,19 @@ class MovieLensApp {
         const movieLines = moviesText.trim().split('\n');
         for (const line of movieLines) {
             const parts = line.split('|');
+            if (parts.length < 5) continue;
+            
             const item_id = parseInt(parts[0]);
             const title = parts[1];
-            const genreFlags = parts.slice(5, 24).map(flag => parseInt(flag));
+            // Parse genre flags (positions 5-23)
+            const genreFlags = [];
+            for (let i = 5; i < Math.min(parts.length, 24); i++) {
+                genreFlags.push(parseInt(parts[i]) || 0);
+            }
+            // Pad if necessary
+            while (genreFlags.length < 19) {
+                genreFlags.push(0);
+            }
             
             const genres = genreFlags.map((flag, index) => flag === 1 ? genreList[index] : null)
                                    .filter(genre => genre !== null);
@@ -90,13 +106,16 @@ class MovieLensApp {
         if (usersText) {
             const userLines = usersText.trim().split('\n');
             for (const line of userLines) {
-                const [user_id, age, gender, occupation, zip_code] = line.split('|');
-                users[parseInt(user_id)] = {
-                    age: parseInt(age),
-                    gender: gender,
-                    occupation: occupation,
-                    zip_code: zip_code
-                };
+                const parts = line.split('|');
+                if (parts.length >= 4) {
+                    const [user_id, age, gender, occupation, zip_code] = parts;
+                    users[parseInt(user_id)] = {
+                        age: parseInt(age),
+                        gender: gender,
+                        occupation: occupation,
+                        zip_code: zip_code
+                    };
+                }
             }
         }
 
@@ -132,10 +151,14 @@ class MovieLensApp {
         for (const [modelName, model] of Object.entries(this.models)) {
             this.updateStatus(`Training ${modelName}...`, 'loading');
             
-            const history = await model.train(this.data.ratings, this.data.movies, 10, 64);
-            this.trainingHistory[modelName] = history;
-            
-            this.updateChart(modelName, history);
+            try {
+                const history = await model.train(this.data.ratings, this.data.movies, 5, 64);
+                this.trainingHistory[modelName] = history;
+                this.updateChart(modelName, history);
+            } catch (error) {
+                console.error(`Error training ${modelName}:`, error);
+                this.updateStatus(`Error training ${modelName}: ${error.message}`, 'error');
+            }
         }
 
         this.updateStatus('All models trained successfully!', 'success');
@@ -164,26 +187,32 @@ class MovieLensApp {
     }
 
     async testModels() {
-        if (!this.models.noDL) {
+        if (!this.models.noDL || !this.models.noDL.model) {
             this.updateStatus('Please train models first!', 'error');
             return;
         }
 
         this.updateStatus('Testing models...', 'loading');
 
-        // Select a random user for testing
-        const userId = Math.floor(Math.random() * this.data.numUsers) + 1;
+        // Select a random user for testing (ensure user exists in data)
+        const userRatingsMap = {};
+        this.data.ratings.forEach(r => {
+            if (!userRatingsMap[r.user_id]) userRatingsMap[r.user_id] = [];
+            userRatingsMap[r.user_id].push(r);
+        });
+        
+        const availableUsers = Object.keys(userRatingsMap).map(Number);
+        const userId = availableUsers[Math.floor(Math.random() * availableUsers.length)];
         this.testUserId = userId;
 
         // Get user's historical ratings
-        const userRatings = this.data.ratings
-            .filter(r => r.user_id === userId)
+        const userRatings = userRatingsMap[userId]
             .sort((a, b) => b.rating - a.rating)
             .slice(0, 10)
             .map(r => ({
-                title: this.data.movies[r.item_id].title,
+                title: this.data.movies[r.item_id]?.title || `Movie ${r.item_id}`,
                 rating: r.rating,
-                genres: this.data.movies[r.item_id].genres.join(', ')
+                genres: this.data.movies[r.item_id]?.genres?.join(', ') || 'Unknown'
             }));
 
         // Display user history
@@ -192,9 +221,14 @@ class MovieLensApp {
         // Get recommendations from each model
         const recommendations = {};
         for (const [modelName, model] of Object.entries(this.models)) {
-            const userRecs = await model.recommend(userId, this.data.movies, 10);
-            recommendations[modelName] = userRecs;
-            this.displayRecommendations(modelName, userRecs);
+            try {
+                const userRecs = await model.recommend(userId, this.data.movies, 10);
+                recommendations[modelName] = userRecs;
+                this.displayRecommendations(modelName, userRecs);
+            } catch (error) {
+                console.error(`Error getting recommendations from ${modelName}:`, error);
+                recommendations[modelName] = [];
+            }
         }
 
         // Show comparison section
@@ -241,7 +275,12 @@ class MovieLensApp {
         const k = 10;
 
         for (const [modelName, model] of Object.entries(this.models)) {
-            metrics[modelName] = await this.calculateMetrics(model, this.testUserId, k);
+            try {
+                metrics[modelName] = await this.calculateMetrics(model, this.testUserId, k);
+            } catch (error) {
+                console.error(`Error calculating metrics for ${modelName}:`, error);
+                metrics[modelName] = { precision: 0, recall: 0, hits: 0, totalPositives: 0 };
+            }
         }
 
         this.displayMetrics(metrics);
@@ -261,8 +300,8 @@ class MovieLensApp {
 
         // Calculate metrics
         const hits = recommendedIds.filter(id => userPositives.includes(id)).length;
-        const precision = hits / k;
-        const recall = hits / userPositives.length;
+        const precision = k > 0 ? hits / k : 0;
+        const recall = userPositives.length > 0 ? hits / userPositives.length : 0;
 
         return {
             precision: precision,
