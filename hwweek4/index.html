@@ -3,276 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MovieLens Three-Model Comparison Demo</title>
+    <title>MovieLens Two-Tower Retrieval Demo</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-vis@1.5.1/dist/tfjs-vis.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega@5.20.0/build/vega.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.1.0/build/vega-lite.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.18.2/build/vega-embed.min.js"></script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-            background: #f5f5f5;
-        }
-        .container {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        .header {
-            background: white;
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-        .control-panel {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            justify-content: center;
-        }
-        button {
-            padding: 12px 20px;
-            background: #007cba;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s;
-        }
-        button:hover:not(:disabled) {
-            background: #005a87;
-            transform: translateY(-2px);
-        }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-        }
-        .status {
-            padding: 15px;
-            background: white;
-            border-radius: 8px;
-            margin: 10px 0;
-            border-left: 4px solid #007cba;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            font-weight: 500;
-        }
-        .progress-bar {
-            width: 100%;
-            height: 6px;
-            background: #f0f0f0;
-            border-radius: 3px;
-            margin: 10px 0;
-            overflow: hidden;
-        }
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #007cba, #00a8ff);
-            transition: width 0.3s;
-        }
-        
-        /* Comparison Section */
-        .comparison-section {
-            display: none;
-            margin-top: 30px;
-        }
-        .user-history {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .models-comparison {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 20px;
-            margin-top: 20px;
-        }
-        .model-card {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            border-top: 4px solid;
-        }
-        .model-card.baseline { border-color: #007cba; }
-        .model-card.mlp { border-color: #28a745; }
-        .model-card.deep { border-color: #dc3545; }
-        .model-header {
-            text-align: center;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #f0f0f0;
-        }
-        .model-header h3 {
-            margin: 0;
-            font-size: 18px;
-        }
-        .recommendation-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .recommendation-table th {
-            background: #f8f9fa;
-            padding: 12px;
-            text-align: left;
-            font-weight: 600;
-            border-bottom: 2px solid #e9ecef;
-        }
-        .recommendation-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #e9ecef;
-        }
-        .genre-tag {
-            display: inline-block;
-            background: #e3f2fd;
-            color: #1976d2;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 0.75em;
-            margin: 2px;
-        }
-        .metrics-panel {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-            margin: 25px 0;
-        }
-        .metric-card {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .metric-value {
-            font-size: 28px;
-            font-weight: bold;
-            margin: 10px 0;
-        }
-        .metric-card.baseline .metric-value { color: #007cba; }
-        .metric-card.mlp .metric-value { color: #28a745; }
-        .metric-card.deep .metric-value { color: #dc3545; }
-        
-        /* Training Charts */
-        .training-section {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-top: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        
-        .score-cell {
-            font-family: 'Courier New', monospace;
-            font-weight: bold;
-        }
-        
-        .high-score { color: #28a745; }
-        .medium-score { color: #ffc107; }
-        .low-score { color: #dc3545; }
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { display: flex; flex-direction: column; gap: 20px; }
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; }
+        button { padding: 10px 15px; cursor: pointer; }
+        .models-comparison { display: flex; gap: 15px; flex-wrap: wrap; }
+        .model-section { flex: 1; min-width: 300px; border: 1px solid #ddd; padding: 15px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .chart-container { height: 300px; margin: 15px 0; }
+        .user-history { margin-bottom: 20px; }
+        .metrics { display: flex; gap: 15px; margin-top: 20px; }
+        .metric-card { padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .loading { color: #666; font-style: italic; }
+        .error { color: red; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🎬 MovieLens Three-Model Comparison Demo</h1>
-            <p>Compare Without DL, MLP, and Deep Learning Two-Tower models with genre features</p>
-        </div>
+        <h1>MovieLens Two-Tower Retrieval Demo</h1>
         
-        <div class="control-panel">
-            <button id="loadData">📥 Load MovieLens Data</button>
-            <button id="trainModels" disabled>⚡ Train All Models</button>
-            <button id="compareModels" disabled>📊 Compare All Models</button>
+        <div class="controls">
+            <button id="loadData">Load Data</button>
+            <button id="trainModels">Train All Models</button>
+            <button id="testModels">Test</button>
+            <button id="compareModels">Compare Models</button>
         </div>
 
-        <div id="status" class="status">🚀 Ready to load MovieLens 100K data...</div>
-        <div id="progressBar" class="progress-bar" style="display: none;">
-            <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+        <div id="status"></div>
+
+        <div class="user-history" id="userHistory" style="display: none;">
+            <h2>User's Top 10 Rated Movies</h2>
+            <table id="userHistoryTable">
+                <thead>
+                    <tr>
+                        <th>Movie Title</th>
+                        <th>Rating</th>
+                        <th>Genres</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
         </div>
 
-        <div id="trainingCharts" class="training-section"></div>
-
-        <div id="comparisonSection" class="comparison-section">
-            <h2>📊 Model Comparison Results</h2>
-            
-            <div class="user-history">
-                <h3>📖 User History (Top 10 Rated Movies)</h3>
-                <table class="recommendation-table" id="historyTable">
+        <div class="models-comparison" id="modelsComparison" style="display: none;">
+            <div class="model-section">
+                <h3>Without Deep Learning</h3>
+                <div class="chart-container" id="chartNoDL"></div>
+                <table id="tableNoDL">
                     <thead>
                         <tr>
                             <th>Movie Title</th>
+                            <th>Score</th>
                             <th>Genres</th>
-                            <th>Rating</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
                 </table>
             </div>
-
-            <div class="metrics-panel" id="metricsPanel">
-                <!-- Metrics will be populated here -->
+            
+            <div class="model-section">
+                <h3>MLP Two-Tower</h3>
+                <div class="chart-container" id="chartMLP"></div>
+                <table id="tableMLP">
+                    <thead>
+                        <tr>
+                            <th>Movie Title</th>
+                            <th>Score</th>
+                            <th>Genres</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
             </div>
-
-            <h3>🎯 Recommendations Comparison</h3>
-            <div class="models-comparison">
-                <div class="model-card baseline">
-                    <div class="model-header">
-                        <h3>📈 Without Deep Learning</h3>
-                        <p>Simple embeddings + genre features</p>
-                    </div>
-                    <table class="recommendation-table">
-                        <thead>
-                            <tr>
-                                <th>Movie Title</th>
-                                <th>Genres</th>
-                                <th>Score</th>
-                            </tr>
-                        </thead>
-                        <tbody id="baselineRecommendations"></tbody>
-                    </table>
-                </div>
-                
-                <div class="model-card mlp">
-                    <div class="model-header">
-                        <h3>🔬 MLP Two-Tower</h3>
-                        <p>MLP with hidden layers + genre features</p>
-                    </div>
-                    <table class="recommendation-table">
-                        <thead>
-                            <tr>
-                                <th>Movie Title</th>
-                                <th>Genres</th>
-                                <th>Score</th>
-                            </tr>
-                        </thead>
-                        <tbody id="mlpRecommendations"></tbody>
-                    </table>
-                </div>
-                
-                <div class="model-card deep">
-                    <div class="model-header">
-                        <h3>🧠 Deep Learning Two-Tower</h3>
-                        <p>Advanced deep architecture + genre features</p>
-                    </div>
-                    <table class="recommendation-table">
-                        <thead>
-                            <tr>
-                                <th>Movie Title</th>
-                                <th>Genres</th>
-                                <th>Score</th>
-                            </tr>
-                        </thead>
-                        <tbody id="deepRecommendations"></tbody>
-                    </table>
-                </div>
+            
+            <div class="model-section">
+                <h3>Deep Learning Two-Tower</h3>
+                <div class="chart-container" id="chartDeep"></div>
+                <table id="tableDeep">
+                    <thead>
+                        <tr>
+                            <th>Movie Title</th>
+                            <th>Score</th>
+                            <th>Genres</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
             </div>
+        </div>
+
+        <div class="metrics" id="metricsComparison" style="display: none;">
+            <!-- Metrics will be populated dynamically -->
         </div>
     </div>
 
