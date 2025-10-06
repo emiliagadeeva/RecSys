@@ -160,7 +160,8 @@ class MovieLensApp {
         const movies = new Map();
         const mockTitles = [
             "The Matrix", "Inception", "Interstellar", "The Godfather", "Pulp Fiction",
-            "Forrest Gump", "Fight Club", "The Shawshank Redemption", "The Dark Knight"
+            "Forrest Gump", "Fight Club", "The Shawshank Redemption", "The Dark Knight",
+            "Star Wars", "Avatar", "Titanic", "Jurassic Park", "The Avengers", "Black Panther"
         ];
         
         for (let i = 1; i <= 500; i++) {
@@ -177,24 +178,37 @@ class MovieLensApp {
         }
         
         this.data.movies = movies;
+        console.log('Created mock movies data');
     }
 
     async loadMockRatings() {
         const ratings = [];
-        for (let i = 0; i < 2000; i++) {
+        // Create more realistic ratings with patterns
+        for (let i = 0; i < 5000; i++) {
+            const userId = Math.floor(Math.random() * 200) + 1;
+            const movieId = Math.floor(Math.random() * 500) + 1;
+            
+            // Create some rating patterns based on user and movie
+            let baseRating = 3;
+            if (userId % 3 === 0) baseRating += 1; // Some users rate higher
+            if (movieId % 5 === 0) baseRating += 1; // Some movies are more popular
+            
+            const rating = Math.max(1, Math.min(5, baseRating + (Math.random() - 0.5) * 2));
+            
             ratings.push({
-                userId: Math.floor(Math.random() * 200) + 1,
-                movieId: Math.floor(Math.random() * 500) + 1,
-                rating: Math.random() > 0.3 ? Math.floor(Math.random() * 2) + 4 : Math.floor(Math.random() * 3) + 2,
+                userId: userId,
+                movieId: movieId,
+                rating: Math.round(rating),
                 timestamp: Date.now()
             });
         }
         this.data.ratings = ratings;
+        console.log('Created mock ratings data');
     }
 
     async loadMockUsers() {
         const users = new Map();
-        const occupations = ['educator', 'engineer', 'student', 'artist'];
+        const occupations = ['educator', 'engineer', 'student', 'artist', 'doctor', 'lawyer'];
         for (let i = 1; i <= 200; i++) {
             users.set(i, {
                 id: i,
@@ -204,6 +218,7 @@ class MovieLensApp {
             });
         }
         this.data.users = users;
+        console.log('Created mock users data');
     }
 
     getGenreNames(genreVector) {
@@ -237,24 +252,25 @@ class MovieLensApp {
         this.updateStatus('⚡ Training all three models...');
         
         try {
-            // ВАЖНО: Используем правильные имена классов из two-tower.js
+            // Initialize models with proper architecture
             this.models = {
-                baseline: new WithoutDLTwoTower(16, 200, 500, 19),
-                mlp: new MLPTwoTower(16, 200, 500, 19),
-                deep: new DeepLearningTwoTower(16, 200, 500, 19)
+                baseline: new WithoutDLTwoTower(32, 200, 500, 19),
+                mlp: new MLPTwoTower(32, 200, 500, 19),
+                deep: new DeepLearningTwoTower(32, 200, 500, 19)
             };
             
-            const { userInput, movieInput, ratings } = this.prepareTrainingData();
+            // Prepare training data with negative sampling
+            const { userInput, movieInput, ratings } = this.prepareTrainingDataWithNegatives();
             
-            // Train models sequentially
+            // Train models with proper parameters
             this.updateStatus('📈 Training Without DL model...');
-            this.trainingHistories.baseline = await this.models.baseline.train(userInput, movieInput, ratings, 2, 32);
+            this.trainingHistories.baseline = await this.models.baseline.train(userInput, movieInput, ratings, 5, 64);
             
             this.updateStatus('🔬 Training MLP Two-Tower...');
-            this.trainingHistories.mlp = await this.models.mlp.train(userInput, movieInput, ratings, 2, 32);
+            this.trainingHistories.mlp = await this.models.mlp.train(userInput, movieInput, ratings, 5, 64);
             
             this.updateStatus('🧠 Training Deep Learning Two-Tower...');
-            this.trainingHistories.deep = await this.models.deep.train(userInput, movieInput, ratings, 2, 32);
+            this.trainingHistories.deep = await this.models.deep.train(userInput, movieInput, ratings, 5, 64);
             
             this.plotTrainingHistories();
             this.updateStatus('✅ All models trained! Click "Compare All Models" to see results.');
@@ -267,27 +283,83 @@ class MovieLensApp {
         }
     }
 
-    prepareTrainingData() {
-        const subsetSize = Math.min(500, this.data.ratings.length);
-        const subsetRatings = this.data.ratings.slice(0, subsetSize);
+    prepareTrainingDataWithNegatives() {
+        // Collect positive interactions (ratings >= 4)
+        const positiveInteractions = this.data.ratings
+            .filter(r => r.rating >= 4)
+            .slice(0, 800);
         
-        const userInput = subsetRatings.map(r => r.userId - 1);
-        const movieInput = subsetRatings.map(r => {
+        // Create negative samples (user didn't watch the movie)
+        const negativeInteractions = this.createNegativeSamples(positiveInteractions.length);
+        
+        const allInteractions = [...positiveInteractions, ...negativeInteractions];
+        
+        // Shuffle data
+        this.shuffleArray(allInteractions);
+        
+        const userInput = allInteractions.map(r => r.userId - 1);
+        const movieInput = allInteractions.map(r => {
             const movie = this.data.movies.get(r.movieId);
             return {
                 movieId: r.movieId - 1,
                 genres: movie.genres
             };
         });
-        const ratings = subsetRatings.map(r => r.rating >= 4 ? 1 : 0);
         
-        console.log(`Training data: ${userInput.length} samples`);
+        // Positive examples = 1, negative = 0
+        const ratings = allInteractions.map(r => r.label);
+        
+        console.log(`Training data: ${positiveInteractions.length} positive, ${negativeInteractions.length} negative samples`);
         
         return {
             userInput: tf.tensor1d(userInput, 'int32'),
             movieInput: movieInput,
             ratings: tf.tensor1d(ratings, 'float32')
         };
+    }
+
+    createNegativeSamples(positiveCount) {
+        const negativeSamples = [];
+        const userMovies = new Map();
+        
+        // Collect which movies each user watched
+        this.data.ratings.forEach(rating => {
+            if (!userMovies.has(rating.userId)) {
+                userMovies.set(rating.userId, new Set());
+            }
+            userMovies.get(rating.userId).add(rating.movieId);
+        });
+        
+        const allMovieIds = Array.from(this.data.movies.keys());
+        let created = 0;
+        const maxAttempts = positiveCount * 10;
+        let attempts = 0;
+        
+        while (created < positiveCount && created < 800 && attempts < maxAttempts) {
+            const randomUser = Math.floor(Math.random() * 200) + 1;
+            const randomMovie = allMovieIds[Math.floor(Math.random() * allMovieIds.length)];
+            
+            // Check that user did NOT watch this movie
+            if (userMovies.has(randomUser) && !userMovies.get(randomUser).has(randomMovie)) {
+                negativeSamples.push({
+                    userId: randomUser,
+                    movieId: randomMovie,
+                    label: 0 // Negative example
+                });
+                created++;
+            }
+            attempts++;
+        }
+        
+        console.log(`Created ${negativeSamples.length} negative samples`);
+        return negativeSamples;
+    }
+
+    shuffleArray(array) {
+        for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
+        }
     }
 
     plotTrainingHistories() {
@@ -297,7 +369,10 @@ class MovieLensApp {
             { name: 'Deep Two-Tower', history: this.trainingHistories.deep, color: '#dc3545' }
         ].filter(model => model.history && model.history.loss.length > 0);
         
-        if (histories.length === 0) return;
+        if (histories.length === 0) {
+            this.updateStatus('⚠️ No training history to display');
+            return;
+        }
 
         const lossSeries = histories.map(model => ({
             values: model.history.loss,
@@ -342,9 +417,9 @@ class MovieLensApp {
             
             // Get recommendations from all models
             const [baselineRecs, mlpRecs, deepRecs] = await Promise.all([
-                this.getRecommendations(this.models.baseline, testUserId, 8),
-                this.getRecommendations(this.models.mlp, testUserId, 8),
-                this.getRecommendations(this.models.deep, testUserId, 8)
+                this.getRecommendations(this.models.baseline, testUserId, 10),
+                this.getRecommendations(this.models.mlp, testUserId, 10),
+                this.getRecommendations(this.models.deep, testUserId, 10)
             ]);
             
             // Display all recommendations
@@ -409,21 +484,21 @@ class MovieLensApp {
         });
         
         for (const [userId, count] of userRatingCounts) {
-            if (count >= 2) return userId;
+            if (count >= 3) return userId;
         }
         
         const usersWithRatings = new Set(this.data.ratings.map(r => r.userId));
         return usersWithRatings.size > 0 ? Array.from(usersWithRatings)[0] : 1;
     }
 
-    async getRecommendations(model, userId, count = 8) {
+    async getRecommendations(model, userId, count = 10) {
         try {
             const userEmbedding = await model.getUserEmbedding(userId - 1);
             const allMovies = Array.from(this.data.movies.values());
             const scores = [];
             
-            // Test with smaller subset for performance
-            for (const movie of allMovies.slice(0, 50)) {
+            // Test with reasonable subset for performance
+            for (const movie of allMovies.slice(0, 200)) {
                 const movieEmbedding = await model.getItemEmbedding(movie.id - 1, movie.genres);
                 const score = await this.dotProduct(userEmbedding, movieEmbedding);
                 scores.push({ movie, score });
@@ -501,11 +576,20 @@ class MovieLensApp {
                 genreCell.style.color = '#999';
             }
             
-            // Score cell
+            // Score cell with color coding
             const scoreCell = row.insertCell(2);
             scoreCell.textContent = item.score.toFixed(4);
             scoreCell.className = 'score-cell';
             scoreCell.style.fontFamily = 'monospace';
+            
+            // Color code based on score
+            if (item.score > 0.7) {
+                scoreCell.classList.add('high-score');
+            } else if (item.score > 0.3) {
+                scoreCell.classList.add('medium-score');
+            } else {
+                scoreCell.classList.add('low-score');
+            }
         });
     }
 
