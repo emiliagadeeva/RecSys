@@ -24,6 +24,7 @@ class BaseTwoTower {
 
         for (let epoch = 0; epoch < epochs; epoch++) {
             let epochLoss = 0;
+            let epochAcc = 0;
             let batchCount = 0;
 
             for (let i = 0; i < userInput.shape[0]; i += batchSize) {
@@ -40,14 +41,17 @@ class BaseTwoTower {
                 );
 
                 epochLoss += result[0];
+                epochAcc += result[1];
                 batchCount++;
 
                 tf.dispose([userBatch, movieIdBatch, genreBatch, labelBatch]);
             }
 
             const avgLoss = epochLoss / batchCount;
+            const avgAcc = epochAcc / batchCount;
             history.loss.push(avgLoss);
-            console.log(`Epoch ${epoch + 1}/${epochs} - loss: ${avgLoss.toFixed(4)}`);
+            history.acc.push(avgAcc);
+            console.log(`Epoch ${epoch + 1}/${epochs} - loss: ${avgLoss.toFixed(4)} - acc: ${avgAcc.toFixed(4)}`);
         }
 
         movieIds.dispose();
@@ -132,7 +136,7 @@ class MLPTwoTower extends BaseTwoTower {
     buildModel() {
         console.log('Building MLP Two-Tower model...');
         
-        // User Tower: Embedding + MLP
+        // User Tower: Embedding + MLP with hidden layer
         const userInput = tf.input({ shape: [1], dtype: 'int32' });
         const userEmbedding = tf.layers.embedding({
             inputDim: this.numUsers,
@@ -152,7 +156,7 @@ class MLPTwoTower extends BaseTwoTower {
         }).apply(userHidden);
         this.userTower = tf.model({ inputs: userInput, outputs: userOutput });
 
-        // Item Tower: Embedding + Genres + MLP
+        // Item Tower: Embedding + Genres + MLP with hidden layer
         const movieIdInput = tf.input({ shape: [1], dtype: 'int32' });
         const genreInput = tf.input({ shape: [this.numGenres] });
         
@@ -162,3 +166,122 @@ class MLPTwoTower extends BaseTwoTower {
         }).apply(movieIdInput);
         const movieFlatten = tf.layers.flatten().apply(movieEmbedding);
         
+        // Process genres with MLP
+        const genreHidden = tf.layers.dense({
+            units: 16,
+            activation: 'relu'
+        }).apply(genreInput);
+        
+        // Combine movie and genre features
+        const combined = tf.layers.concatenate().apply([movieFlatten, genreHidden]);
+        
+        // MLP for combined features
+        const itemHidden = tf.layers.dense({
+            units: 32,
+            activation: 'relu'
+        }).apply(combined);
+        
+        const itemOutput = tf.layers.dense({
+            units: this.embeddingDim,
+            activation: 'linear'
+        }).apply(itemHidden);
+        this.itemTower = tf.model({ inputs: [movieIdInput, genreInput], outputs: itemOutput });
+
+        // Combined model
+        const userVec = this.userTower.apply(userInput);
+        const itemVec = this.itemTower.apply([movieIdInput, genreInput]);
+        const dotProduct = tf.layers.dot({ axes: 1 }).apply([userVec, itemVec]);
+        const prediction = tf.layers.dense({ units: 1, activation: 'sigmoid' }).apply(dotProduct);
+
+        this.model = tf.model({
+            inputs: [userInput, movieIdInput, genreInput],
+            outputs: prediction
+        });
+
+        this.compileModel();
+    }
+}
+
+class DeepLearningTwoTower extends BaseTwoTower {
+    buildModel() {
+        console.log('Building Deep Learning Two-Tower model...');
+        
+        // User Tower: Deep architecture with multiple layers
+        const userInput = tf.input({ shape: [1], dtype: 'int32' });
+        const userEmbedding = tf.layers.embedding({
+            inputDim: this.numUsers,
+            outputDim: 64
+        }).apply(userInput);
+        const userFlatten = tf.layers.flatten().apply(userEmbedding);
+        
+        // Deep layers for user tower
+        const userDense1 = tf.layers.dense({
+            units: 48,
+            activation: 'relu'
+        }).apply(userFlatten);
+        
+        const userDense2 = tf.layers.dense({
+            units: 32,
+            activation: 'relu'
+        }).apply(userDense1);
+        
+        const userOutput = tf.layers.dense({
+            units: this.embeddingDim,
+            activation: 'tanh'
+        }).apply(userDense2);
+        this.userTower = tf.model({ inputs: userInput, outputs: userOutput });
+
+        // Item Tower: Deep architecture with genre integration
+        const movieIdInput = tf.input({ shape: [1], dtype: 'int32' });
+        const genreInput = tf.input({ shape: [this.numGenres] });
+        
+        const movieEmbedding = tf.layers.embedding({
+            inputDim: this.numItems,
+            outputDim: 48
+        }).apply(movieIdInput);
+        const movieFlatten = tf.layers.flatten().apply(movieEmbedding);
+        
+        // Deep processing for genres
+        const genreDense1 = tf.layers.dense({
+            units: 32,
+            activation: 'relu'
+        }).apply(genreInput);
+        
+        const genreDense2 = tf.layers.dense({
+            units: 24,
+            activation: 'relu'
+        }).apply(genreDense1);
+        
+        // Combine and further process
+        const combined = tf.layers.concatenate().apply([movieFlatten, genreDense2]);
+        
+        const itemDense1 = tf.layers.dense({
+            units: 48,
+            activation: 'relu'
+        }).apply(combined);
+        
+        const itemDense2 = tf.layers.dense({
+            units: 32,
+            activation: 'relu'
+        }).apply(itemDense1);
+        
+        const itemOutput = tf.layers.dense({
+            units: this.embeddingDim,
+            activation: 'tanh'
+        }).apply(itemDense2);
+        this.itemTower = tf.model({ inputs: [movieIdInput, genreInput], outputs: itemOutput });
+
+        // Combined model
+        const userVec = this.userTower.apply(userInput);
+        const itemVec = this.itemTower.apply([movieIdInput, genreInput]);
+        const dotProduct = tf.layers.dot({ axes: 1 }).apply([userVec, itemVec]);
+        const prediction = tf.layers.dense({ units: 1, activation: 'sigmoid' }).apply(dotProduct);
+
+        this.model = tf.model({
+            inputs: [userInput, movieIdInput, genreInput],
+            outputs: prediction
+        });
+
+        this.compileModel();
+    }
+}
