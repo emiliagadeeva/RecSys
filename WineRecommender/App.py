@@ -19,8 +19,8 @@ app = Flask(__name__)
 # ==================== КОНФИГУРАЦИЯ ====================
 # ЗАМЕНИТЕ ЭТИ ID НА СВОИ ФАЙЛЫ С GOOGLE DRIVE
 GOOGLE_DRIVE_CONFIG = {
-    'wine_csv_id': 'YOUR_GOOGLE_DRIVE_FILE_ID_FOR_WINES_CSV',
-    'embeddings_id': 'YOUR_GOOGLE_DRIVE_FILE_ID_FOR_EMBEDDINGS',
+    'wine_csv_id': '18mwRZRlY3f6M6nN6VmiHKzDAAZxfEF7A,
+    'embeddings_id': '1w7to6R0qf2h0-yBXwJl62-pRWN5LP60I',
 }
 
 # Или используйте прямые ссылки на скачивание (если файлы публичные)
